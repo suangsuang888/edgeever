@@ -35,11 +35,9 @@ import {
   type ThemeTokens,
 } from "@edgeever/plugin-api";
 import { markdownToDoc } from "@edgeever/shared";
-import { api } from "@/lib/api";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { WebPluginSecretStore, type PluginSecretStorage } from "@/lib/plugins/plugin-secret-store";
 import { WebPluginPackageStore, type CachedPluginPackage, type PluginPackageStorage } from "@/lib/plugins/plugin-package-store";
-import { isPluginIdRevoked } from "@/lib/plugins/community-registry-store";
 import { downloadGithubExtension, downloadPinnedGithubExtension, extensionManifestsEqual, parseGithubRepositoryUrl, sha256Hex } from "@/lib/plugins/github-plugin-distribution";
 import {
   catalogInstallSource,
@@ -200,7 +198,7 @@ export interface PluginHostSnapshot {
 interface PluginHostOptions {
   repository: EdgeEverRepository;
   scope: string;
-  aiAdapter?: Pick<PluginContext['ai'], 'status' | 'generate'>;
+  aiAdapter?: PluginContext['ai'];
   publicNetworkAdapter?: {
     fetchPublic(input: { url: string; method: 'GET' | 'HEAD'; headers: Record<string, string> }, options?: { signal?: AbortSignal }): Promise<{ status: number; statusText: string; url: string; headers: Record<string, string>; body: ArrayBuffer }>;
   };
@@ -691,9 +689,6 @@ export class EdgeEverPluginHost {
     source: ExtensionInstallSource,
     pluginPackage: CachedPluginPackage | null,
   ) {
-    if (await isPluginIdRevoked(manifest.id)) {
-      throw new Error(`Extension ${manifest.id} was revoked and can no longer be installed or updated.`);
-    }
     const previous = this.extensions.find((item) => item.manifest.id === manifest.id);
     const wasActive = this.activePlugins.has(manifest.id);
     if (pluginPackage) await this.packageStorage.put(pluginPackage);
@@ -1081,15 +1076,6 @@ export class EdgeEverPluginHost {
           if (!this.aiAdapter) throw new Error('AI generation is unavailable in this host.');
           const signal = AbortSignal.any([lifetime.signal, ...(input.signal ? [input.signal] : [])]);
           const result = await this.aiAdapter.generate({ ...input, signal }); signal.throwIfAborted(); return result;
-        },
-        transcribeResource: async (noteId, resourceId) => {
-          assertPermission(manifest, 'ai:generate');
-          assertPermission(manifest, 'resources:read');
-          lifetime.signal.throwIfAborted();
-          const { transcribeNoteResource } = await import("@/lib/transcribe-note-resource");
-          const result = await transcribeNoteResource(noteId, resourceId, lifetime.signal);
-          lifetime.signal.throwIfAborted();
-          return result;
         },
       },
       notes: {

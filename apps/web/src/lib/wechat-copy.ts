@@ -91,7 +91,6 @@ const applyLegacyWeChatStyles = (
   };
 
   root.style.cssText = `${textStyle} background-color: #ffffff; word-break: break-word;`;
-  root.querySelectorAll("[data-edgeever-video-note]").forEach((element) => element.remove());
 
   root.querySelectorAll<HTMLElement>("*").forEach((element) => {
     if (element.closest("[data-ee-math]")) return;

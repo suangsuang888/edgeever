@@ -103,8 +103,6 @@ import { sanitizeAndScopeCss } from "@/lib/css-sandbox";
 import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
 import { ExternalLinkDialog } from "./dialogs/ExternalLinkDialog";
 import { MathFormulaDialog } from "./dialogs/MathFormulaDialog";
-import { AttachmentTranscriptDialog } from "./dialogs/AttachmentTranscriptDialog";
-import { SpeechProviderReachabilityError } from "@/lib/speech-transcription-error";
 import { EditorBlockDragHandle } from "./editor/EditorBlockDragHandle";
 import {
   applyMathFormula,
@@ -223,7 +221,6 @@ import {
   AI_SELECTION_MENU_CHANGED_EVENT,
   readAiSelectionMenuPreference,
 } from "@/lib/ai-selection-menu-preference";
-import { useEditorSpellcheckPreference } from "@/lib/editor-spellcheck-preference";
 import {
   clipSelectionForSend,
   translationReplacement,
@@ -476,7 +473,6 @@ const RichEditorPane = ({
     writeAiSidebarOpen(open);
   }, []);
   const aiBubbleMenu = useAiBubbleMenu();
-  const spellcheckEnabled = useEditorSpellcheckPreference();
   const [selectionPin, setSelectionPin] = useState<SelectionAiPin | null>(null);
   const [selectionRequest, setSelectionRequest] = useState<SelectionAiRequest | null>(null);
   const selectionPinRef = useRef<SelectionAiPin | null>(null);
@@ -499,15 +495,6 @@ const RichEditorPane = ({
     canRemove: false,
   });
   const [mathFormulaOpen, setMathFormulaOpen] = useState(false);
-  const [attachmentTranscript, setAttachmentTranscript] = useState<{
-    memoId: string;
-    filename: string;
-    text: string;
-    loading: boolean;
-    completedSegments: number;
-    error: string | null;
-  } | null>(null);
-  const attachmentTranscriptAbortRef = useRef<AbortController | null>(null);
   const [mathFormulaDraft, setMathFormulaDraft] = useState<MathFormulaDraft | null>(null);
   const {
     menuTarget: resourceMenuTarget,
@@ -1222,7 +1209,6 @@ const RichEditorPane = ({
     editorProps: {
       attributes: {
         class: "edgeever-note-rich-editor prose prose-slate max-w-none focus:outline-none min-h-[240px] lg:min-h-[180px]",
-        spellcheck: spellcheckEnabled ? "true" : "false",
       },
       handleKeyDown: (view, event) => {
         const { selection } = view.state;
@@ -1830,11 +1816,6 @@ const RichEditorPane = ({
     setNoteLinkHintPosition(null);
     resetResourceActions();
   }, [memo?.id, isMarkdownMode, resetResourceActions]);
-
-  useEffect(() => () => {
-    attachmentTranscriptAbortRef.current?.abort();
-    attachmentTranscriptAbortRef.current = null;
-  }, [memo?.id]);
 
   useEffect(() => () => {
     if (resourceMenuHideTimerRef.current !== null) {
@@ -3131,39 +3112,6 @@ const RichEditorPane = ({
     downloadResourceDirectly(target);
   }, [clearResourceActionError, downloadResourceDirectly, hideResourceMenu]);
 
-  const handleResourceTranscribe = useCallback(async (target: ResourceMenuTarget) => {
-    const currentMemoId = memoRef.current?.id;
-    if (!currentMemoId || !target.resourceId) return;
-    attachmentTranscriptAbortRef.current?.abort();
-    const controller = new AbortController();
-    attachmentTranscriptAbortRef.current = controller;
-    hideResourceMenu();
-    setAttachmentTranscript({ memoId: currentMemoId, filename: target.filename, text: "", loading: true, completedSegments: 0, error: null });
-    try {
-      const { transcribeNoteResource } = await import("@/lib/transcribe-note-resource");
-      const result = await transcribeNoteResource(currentMemoId, target.resourceId, controller.signal, (completedSegments) => {
-        if (attachmentTranscriptAbortRef.current !== controller) return;
-        setAttachmentTranscript((current) => current?.memoId === currentMemoId && current.filename === target.filename
-          ? { ...current, completedSegments }
-          : current);
-      });
-      if (attachmentTranscriptAbortRef.current !== controller) return;
-      setAttachmentTranscript((current) => current?.memoId === currentMemoId && current.filename === target.filename
-        ? { ...current, text: result.text, loading: false }
-        : current);
-    } catch (error) {
-      if (attachmentTranscriptAbortRef.current !== controller || controller.signal.aborted) return;
-      setAttachmentTranscript((current) => current?.memoId === currentMemoId && current.filename === target.filename
-        ? { ...current, loading: false, error: error instanceof SpeechProviderReachabilityError
-          ? t(error.platform === "browser"
-            ? "speechTranscription.browserDirectUnavailable" : "speechTranscription.desktopDirectUnavailable")
-          : error instanceof Error ? error.message : t("speechTranscription.recognizeFailed") }
-        : current);
-    } finally {
-      if (attachmentTranscriptAbortRef.current === controller) attachmentTranscriptAbortRef.current = null;
-    }
-  }, [hideResourceMenu, t]);
-
   const handleResourceSaveAs = useCallback(async (target: ResourceMenuTarget) => {
     hideResourceMenu();
     clearResourceActionError();
@@ -3651,7 +3599,6 @@ const RichEditorPane = ({
   const resourceMenuLabels = {
     download: t("editor.resourceActions.download"),
     saveAs: t("editor.resourceActions.saveAs"),
-    transcribe: t("editor.resourceActions.transcribe"),
     rename: t("editor.resourceActions.rename"),
     delete: t("editor.resourceActions.delete"),
     unavailable: t("editor.resourceActions.unavailable"),
@@ -4246,7 +4193,7 @@ const RichEditorPane = ({
                   enterKeyHint="enter"
                   inputMode="text"
                   name="memo-body"
-                  spellCheck={spellcheckEnabled}
+                  spellCheck
                   data-edgeever-mobile-editor="plain-textarea"
                   aria-label={t("editor.noteBodyAria")}
                   className="block min-h-[60dvh] w-full resize-none border border-slate-200 bg-card px-4 py-3 pr-32 text-base leading-7 text-slate-950 outline-none placeholder:text-slate-400 sm:px-7"
@@ -4400,49 +4347,15 @@ const RichEditorPane = ({
               resourceMenuTarget.resourceId && !resourceMenuTarget.resourceId.startsWith("local_resource_")
             ))
           )}
-          canTranscribe={Boolean(
-            memo?.id &&
-            resourceMenuTarget.kind === "attachment" &&
-            resourceMenuTarget.resourceId &&
-            !resourceMenuTarget.resourceId.startsWith("local_resource_") &&
-            /\.(flac|mp3|mp4|mpeg|mpga|m4a|ogg|wav|webm)$/i.test(resourceMenuTarget.filename)
-          )}
           labels={resourceMenuLabels}
           onDownload={() => void handleResourceDownload(resourceMenuTarget)}
           onSaveAs={() => void handleResourceSaveAs(resourceMenuTarget)}
-          onTranscribe={() => void handleResourceTranscribe(resourceMenuTarget)}
           onRename={() => openResourceDialog("rename", resourceMenuTarget)}
           onDelete={() => openResourceDialog("delete", resourceMenuTarget)}
           onMouseEnter={cancelResourceMenuHide}
           onMouseLeave={scheduleResourceMenuHide}
         />
       )}
-
-      <AttachmentTranscriptDialog
-        open={Boolean(attachmentTranscript && attachmentTranscript.memoId === memo?.id)}
-        filename={attachmentTranscript?.filename ?? ""}
-        text={attachmentTranscript?.text ?? ""}
-        loading={attachmentTranscript?.loading ?? false}
-        completedSegments={attachmentTranscript?.completedSegments ?? 0}
-        error={attachmentTranscript?.error ?? null}
-        canInsert={Boolean(editor && editor.isEditable && !effectiveReadOnly && !useMarkdownSourceEditor && !useMobilePlainTextEditor)}
-        onOpenChange={(open) => {
-          if (!open) {
-            attachmentTranscriptAbortRef.current?.abort();
-            attachmentTranscriptAbortRef.current = null;
-            setAttachmentTranscript(null);
-          }
-        }}
-        onInsert={() => {
-          if (!editor || !attachmentTranscript?.text || attachmentTranscript.memoId !== memo?.id) return;
-          const paragraphs = attachmentTranscript.text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
-          editor.chain().focus().insertContentAt(editor.state.doc.content.size, [
-            { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: t("speechTranscription.resultTitle") }] },
-            ...paragraphs.map((line) => ({ type: "paragraph", content: [{ type: "text", text: line }] })),
-          ]).run();
-          setAttachmentTranscript(null);
-        }}
-      />
 
       <EditorResourceDialogs
         dialog={resourceDialog}

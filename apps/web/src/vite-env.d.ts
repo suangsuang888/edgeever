@@ -33,7 +33,6 @@ interface EdgeEverDesktopBridge {
     method?: string;
     headers?: Record<string, string>;
     body: string;
-    bodyBytes?: Uint8Array;
   }): Promise<{ status: number; headers: Record<string, string> }>;
   cancelAiProviderStream(requestId: string): void;
   onAiProviderStreamChunk(callback: (requestId: string, chunk: {
